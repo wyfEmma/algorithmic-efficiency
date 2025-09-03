@@ -32,7 +32,6 @@ def init_optimizer_state(workload: spec.Workload,
                          hyperparameters: spec.Hyperparameters,
                          rng: spec.RandomState) -> spec.OptimizerState:
   """Creates an AdamW optimizer and a learning rate schedule."""
-  del model_params
   del model_state
   del rng
   lr=HPARAMS['learning_rate']
@@ -53,9 +52,7 @@ def init_optimizer_state(workload: spec.Workload,
       adjusted_polyak_weight_exp=HPARAMS['r'],
       weight_lr_power=HPARAMS['weight_lr_power'],
   )
-  params_zeros_like = jax.tree_map(lambda s: jnp.zeros(s.shape_tuple),
-                                   workload.param_shapes)
-  optimizer_state = opt_init_fn(params_zeros_like)
+  optimizer_state = opt_init_fn(jax.device_get(jax_utils.unreplicate(model_params)))
 
   return jax_utils.replicate(optimizer_state), opt_update_fn
 
