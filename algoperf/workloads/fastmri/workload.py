@@ -104,7 +104,7 @@ class BaseFastMRIWorkload(spec.Workload):
   @property
   def step_hint(self) -> int:
     """Approx. steps the baseline can do in the allowed runtime budget."""
-    return 18_094
+    return 36_189
 
   def _build_input_queue(self,
                          data_rng: spec.RandomState,
