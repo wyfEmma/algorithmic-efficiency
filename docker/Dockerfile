@@ -86,5 +86,6 @@ RUN cd /algorithmic-efficiency && git pull
 # Todo: remove this, this is temporary for developing
 COPY scripts/startup.sh /algorithmic-efficiency/docker/scripts/startup.sh
 RUN chmod a+x /algorithmic-efficiency/docker/scripts/startup.sh
+RUN pip install --upgrade --no-cache-dir optax>=0.2.3
 
 ENTRYPOINT ["bash", "/algorithmic-efficiency/docker/scripts/startup.sh"]

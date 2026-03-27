@@ -12,6 +12,18 @@ from algoperf import spec
 
 _GRAD_CLIP_EPS = 1e-6
 
+HPARAMS = {
+  'dropout_rate': 0.1,
+  'learning_rate': 0.0025,
+  'one_minus_beta1': 0.1,
+  'beta2': 0.9955159689799007,
+  'weight_decay': 0.08121616522670176,
+  'warmup_factor': 0.02,
+  'weight_lr_power': 2,
+  'label_smoothing': 0.2,
+  'r': 0.75,
+  'eps': 1e-8,
+}
 
 def init_optimizer_state(
   workload: spec.Workload,
@@ -24,18 +36,19 @@ def init_optimizer_state(
   del model_params
   del model_state
   del rng
+  del hyperparameters
 
-  def jax_cosine_warmup(step_hint: int, hyperparameters):
+  def jax_cosine_warmup(step_hint: int):
     # Create learning rate schedule.
-    warmup_steps = int(hyperparameters.warmup_factor * step_hint)
+    warmup_steps = int(HPARAMS['warmup_factor'] * step_hint)
     warmup_fn = optax.linear_schedule(
       init_value=0.0,
-      end_value=hyperparameters.learning_rate,
+      end_value=HPARAMS['learning_rate'],
       transition_steps=warmup_steps,
     )
     cosine_steps = max(step_hint - warmup_steps, 1)
     cosine_fn = optax.cosine_decay_schedule(
-      init_value=hyperparameters.learning_rate, decay_steps=cosine_steps
+      init_value=HPARAMS['learning_rate'], decay_steps=cosine_steps
     )
     schedule_fn = optax.join_schedules(
       schedules=[warmup_fn, cosine_fn], boundaries=[warmup_steps]
@@ -43,13 +56,13 @@ def init_optimizer_state(
     return schedule_fn
 
   # Create optimizer + LR schedule.
-  lr_schedule_fn = jax_cosine_warmup(workload.step_hint, hyperparameters)
+  lr_schedule_fn = jax_cosine_warmup(workload.step_hint)
   opt_init_fn, opt_update_fn = optax.adamw(
     learning_rate=lr_schedule_fn,
-    b1=1.0 - hyperparameters.one_minus_beta1,
-    b2=hyperparameters.beta2,
-    eps=1e-8,
-    weight_decay=hyperparameters.weight_decay,
+    b1=1.0 - HPARAMS['one_minus_beta1'],
+    b2=HPARAMS['beta2'],
+    eps=HPARAMS['eps'],
+    weight_decay=HPARAMS['weight_decay'],
   )
   params_zeros_like = jax.tree.map(
     lambda s: jnp.zeros(s.shape_tuple), workload.param_shapes
@@ -146,7 +159,7 @@ def update_params(
     grad_clip = hyperparameters.grad_clip
   else:
     grad_clip = None
-  dropout_rate = hyperparameters.dropout_rate
+  dropout_rate = HPARAMS['dropout_rate']
 
   # Set up mesh and sharding
   mesh = jax.sharding.Mesh(jax.devices(), ('batch'))
@@ -158,8 +171,6 @@ def update_params(
     static_argnums=(0, 1),
     donate_argnums=(2, 3, 4),
     in_shardings=(
-      # workload is static
-      # opt_update_fn is static
       replicated,  # model_state
       replicated,  # optimizer_state
       replicated,  # current_param_container
@@ -177,7 +188,7 @@ def update_params(
       replicated,  # grad_norm
     ),
   )
-  # print(batch)
+
   new_optimizer_state, new_params, new_model_state, loss, grad_norm = (
     jitted_train_step(
       workload,
@@ -270,9 +281,7 @@ def data_selection(
   global_step: int,
   rng: spec.RandomState,
 ) -> Dict[str, spec.Tensor]:
-  """Select data from the infinitely repeating, pre-shuffled input queue.
-  Each element of the queue is a batch of training examples and labels.
-  """
+  """Select data from the infinitely repeating, pre-shuffled input queue."""
   del workload
   del optimizer_state
   del current_param_container
