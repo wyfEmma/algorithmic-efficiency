@@ -306,7 +306,18 @@ def update_params(workload: spec.Workload,
 
  loss = optimizer_state['optimizer'].step(closure)
  if loss is not None:
-     print(f"PyTorch Loss: {loss.item()}")
+   loss_item = loss.item()
+   if workload.metrics_logger is not None:
+     workload.metrics_logger.append_scalar_metrics(
+         {
+             'loss': loss_item,
+             'train/loss_y': loss_item,
+             'train_loss_y': loss_item,
+         },
+         global_step=global_step,
+         is_eval=False,
+     )
+   print(f"PyTorch Loss (y): {loss_item}")
  return (optimizer_state, current_param_container, new_model_state)
 
 def get_batch_size(workload_name):

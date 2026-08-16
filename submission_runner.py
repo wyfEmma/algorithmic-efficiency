@@ -516,6 +516,16 @@ def train_once(
             latest_eval_result['accumulated_logging_time'] = train_state[
               'accumulated_logging_time'
             ]
+            if metrics_logger is not None and hasattr(
+              metrics_logger, '_latest_train_metrics'
+            ):
+              for k in ('train/loss_y', 'train_loss_y', 'loss'):
+                if (
+                  k in metrics_logger._latest_train_metrics
+                  and k not in latest_eval_result
+                ):
+                  latest_eval_result[k] = metrics_logger._latest_train_metrics[k]
+
             time_since_start = latest_eval_result['total_duration']
             logging.info(
               f'Time since start: {time_since_start:.2f}s, '

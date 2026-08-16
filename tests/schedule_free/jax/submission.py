@@ -318,20 +318,26 @@ def update_params(
     grad_clip,
   )
 
-  # Log loss, grad_norm.
-  if global_step % 100 == 0 and workload.metrics_logger is not None:
+  loss_float = float(loss)
+  grad_norm_float = float(grad_norm) if grad_norm is not None else 0.0
+
+  # Log loss (y), grad_norm.
+  if workload.metrics_logger is not None:
     workload.metrics_logger.append_scalar_metrics(
       {
-        'loss': loss,
-        'grad_norm': grad_norm,
+        'loss': loss_float,
+        'train/loss_y': loss_float,
+        'train_loss_y': loss_float,
+        'grad_norm': grad_norm_float,
       },
-      global_step,
+      global_step=global_step,
+      is_eval=False,
     )
   
   new_is_holding_x = jnp.array(0, dtype=jnp.int32)
   new_optimizer_state = ((new_optimizer_state, new_is_holding_x), opt_update_fn)
 
-  print(f"JAX Loss: {loss}")
+  print(f"JAX Loss (y): {loss_float}")
   return new_optimizer_state, new_params, new_model_state
 
 

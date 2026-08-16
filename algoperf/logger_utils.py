@@ -323,7 +323,9 @@ class MetricLogger(object):
     self._measurements = {}
     self._csv_path = csv_path
     self._eval_csv_path = eval_csv_path
-    self.use_wandb = configs.use_wandb
+    self.use_wandb = configs.use_wandb if configs is not None and hasattr(configs, 'use_wandb') else False
+    self._tb_metric_writer = None
+    self._latest_train_metrics = {}
 
     if events_dir:
       self._tb_metric_writer = metric_writers.create_default_writer(events_dir)
@@ -341,9 +343,21 @@ class MetricLogger(object):
     preemption_count: Optional[int] = None,
     is_eval: bool = False,
   ) -> None:
+    metrics = dict(metrics)
     metrics['global_step'] = global_step
     if preemption_count is not None:
       metrics['preemption_count'] = preemption_count
+
+    if not is_eval:
+      # Track latest training step metrics (such as train loss computed on y)
+      for k, v in metrics.items():
+        if k not in ('global_step', 'preemption_count'):
+          self._latest_train_metrics[k] = v
+    else:
+      # For eval steps, carry forward y-based train loss and related metrics if available
+      for k in ('train/loss_y', 'train_loss_y', 'loss'):
+        if k in self._latest_train_metrics and k not in metrics:
+          metrics[k] = self._latest_train_metrics[k]
 
     write_to_csv(metrics, self._csv_path)
     if is_eval:
@@ -357,6 +371,14 @@ class MetricLogger(object):
 
     if wandb is not None and self.use_wandb:
       wandb.log(metrics)
+
+  def log_train_step_metrics(
+    self,
+    metrics: Dict,
+    global_step: int,
+  ) -> None:
+    """Convenience method to log training step metrics (e.g. y-loss)."""
+    self.append_scalar_metrics(metrics, global_step=global_step, is_eval=False)
 
   def finish(self) -> None:
     if wandb is not None and self.use_wandb:
