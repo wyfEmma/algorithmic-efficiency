@@ -2,25 +2,35 @@ import jax
 import numpy as np
 import torch
 from flax import jax_utils
+from flax.core import unfreeze
 from flax.core import FrozenDict
 
 from tests.modeldiffs.torch2jax_utils import Torch2Jax, value_transform
 
-
+# Transform pytorch model to jax, when
+# pytorch model or jax model is not passed as param,
+# initialize them.
 # pylint: disable=dangerous-default-value
 def torch2jax(
   jax_workload,
   pytorch_workload,
   key_transform=None,
   sd_transform=None,
+  unfreeze_jax_param=False,
+  pytorch_model=None,
+  jax_params=None,
+  jax_model_state=None,
 ):
-  jax_params, model_state = jax_workload.init_model_fn(jax.random.PRNGKey(0))
-  pytorch_model, _ = pytorch_workload.init_model_fn([0])
-  if isinstance(jax_params, dict):
+  if jax_params is None or jax_model_state is None:
+    jax_params, jax_model_state = jax_workload.init_model_fn(jax.random.PRNGKey(0))
+  if pytorch_model is None:
+    pytorch_model, _ = pytorch_workload.init_model_fn([0])
+  if unfreeze_jax_param:
+    jax_params = unfreeze(jax_params)
+    if jax_model_state is not None:
+      jax_model_state = unfreeze(jax_model_state)
+  elif isinstance(jax_params, dict):
     jax_params = FrozenDict(jax_params)
-  jax_params = jax_utils.unreplicate(jax_params).unfreeze()
-  if model_state is not None:
-    model_state = jax_utils.unreplicate(model_state)
 
   if isinstance(
     pytorch_model,
@@ -36,7 +46,7 @@ def torch2jax(
   t2j.value_transform(value_transform)
   t2j.diff()
   t2j.update_jax_model()
-  return jax_params, model_state, pytorch_model
+  return jax_params, jax_model_state, pytorch_model
 
 
 def out_diff(

@@ -325,7 +325,14 @@ class LibriSpeechConformerWorkload(workload.BaseLibrispeechWorkload):
       jax_sharding_utils.get_replicate_sharding(),  # model_state
       jax_sharding_utils.get_replicate_sharding(),  # rng
     ),
-    out_shardings=jax_sharding_utils.get_batch_dim_sharding(),
+    out_shardings={
+      'loss_per_example': jax_sharding_utils.get_batch_dim_sharding(),
+      'decoded': jax_sharding_utils.get_batch_dim_sharding(),
+      'decoded_paddings': jax_sharding_utils.get_batch_dim_sharding(),
+      'targets': jax_sharding_utils.get_batch_dim_sharding(),
+      'target_paddings': jax_sharding_utils.get_batch_dim_sharding(),
+      'n_valid_examples': jax_sharding_utils.get_replicate_sharding(),
+    },
     static_argnums=(0,),
   )
   def _eval_step(
@@ -347,6 +354,8 @@ class LibriSpeechConformerWorkload(workload.BaseLibrispeechWorkload):
     decoded, decoded_paddings = self.greedy_decode(logits, logit_paddings)
     loss = self.loss_fn(batch['targets'], (logits, logit_paddings))
     targets, target_paddings = batch['targets']
+    targets_array = batch['targets'][0]
+    jax.debug.print(f"DEBUG - GPU shape: {targets_array.addressable_shards[0].data.shape}")
     # Convert metrics bundle to dictionary
     metrics_dict = {
       'loss_per_example': loss['per_example'],
@@ -354,8 +363,7 @@ class LibriSpeechConformerWorkload(workload.BaseLibrispeechWorkload):
       'decoded_paddings': decoded_paddings,
       'targets': targets,
       'target_paddings': target_paddings,
-      'n_valid_examples': jnp.zeros((len(jax.devices()), 1))
-      + loss['n_valid_examples'],
+      'n_valid_examples': loss['n_valid_examples'],
     }
     return metrics_dict
 

@@ -256,6 +256,7 @@ def copy_attention_params(pytorch_attn, flax_params):
     'key': {'kernel': reshape_for_flax(k_weight, n_heads, head_dim)},
     'value': {'kernel': reshape_for_flax(v_weight, n_heads, head_dim)},
     'attn_out_proj': {'kernel': pytorch_attn.w_out.weight.detach().numpy().T},
+    'attn_scale': pytorch_attn.attn_scale.detach().numpy(),
   }
 
   return {'params': new_params}
@@ -444,6 +445,7 @@ def copy_full_model_params(pytorch_model, flax_params, config):
       'attn_out_proj': {
         'kernel': pytorch_block.attn.w_out.weight.detach().numpy().T
       },
+      'attn_scale': pytorch_block.attn.attn_scale.detach().numpy(),
     }
 
     # MLP params

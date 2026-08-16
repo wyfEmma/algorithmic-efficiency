@@ -12,6 +12,16 @@ from algoperf.pytorch_utils import pytorch_setup
 
 USE_PYTORCH_DDP = pytorch_setup()[0]
 
+HPARAMS = {
+    "learning_rate": 0.001,
+    "one_minus_beta1": 0.1,
+    "beta2": 0.999,
+    "warmup_factor": 0.05,
+    "weight_decay": 0.1,
+    "label_smoothing": 0.1,
+    "dropout_rate": 0.1,
+}
+
 
 def init_optimizer_state(
   workload: spec.Workload,
@@ -23,20 +33,21 @@ def init_optimizer_state(
   """Creates an AdamW optimizer and a learning rate schedule."""
   del model_state
   del rng
+  del hyperparameters
 
   optimizer_state = {
     'optimizer': torch.optim.AdamW(
       model_params.parameters(),
-      lr=hyperparameters.learning_rate,
-      betas=(1.0 - hyperparameters.one_minus_beta1, hyperparameters.beta2),
+      lr=HPARAMS['learning_rate'],
+      betas=(1.0 - HPARAMS['one_minus_beta1'], HPARAMS['beta2']),
       eps=1e-8,
-      weight_decay=hyperparameters.weight_decay,
+      weight_decay=HPARAMS['weight_decay'],
       fused=False,
     ),
   }
 
-  def pytorch_cosine_warmup(step_hint: int, hyperparameters, optimizer):
-    warmup_steps = hyperparameters.warmup_factor * step_hint
+  def pytorch_cosine_warmup(step_hint: int, optimizer):
+    warmup_steps = HPARAMS['warmup_factor'] * step_hint
     warmup = LinearLR(
       optimizer, start_factor=1e-10, end_factor=1.0, total_iters=warmup_steps
     )
@@ -47,7 +58,7 @@ def init_optimizer_state(
     )
 
   optimizer_state['scheduler'] = pytorch_cosine_warmup(
-    workload.step_hint, hyperparameters, optimizer_state['optimizer']
+    workload.step_hint, optimizer_state['optimizer']
   )
 
   return optimizer_state
@@ -72,6 +83,7 @@ def update_params(
   del loss_type
   del train_state
   del eval_results
+  del hyperparameters
 
   current_model = current_param_container
   current_model.train()
@@ -84,14 +96,10 @@ def update_params(
     mode=spec.ForwardPassMode.TRAIN,
     rng=rng,
     update_batch_norm=True,
-    dropout_rate=hyperparameters.dropout_rate,
+    dropout_rate=HPARAMS['dropout_rate'],
   )
 
-  label_smoothing = (
-    hyperparameters.label_smoothing
-    if hasattr(hyperparameters, 'label_smoothing')
-    else 0.0
-  )
+  label_smoothing = HPARAMS.get('label_smoothing', 0.0)
 
   loss_dict = workload.loss_fn(
     label_batch=batch['targets'],
@@ -109,8 +117,8 @@ def update_params(
 
   loss.backward()
 
-  if hasattr(hyperparameters, 'grad_clip'):
-    grad_clip = hyperparameters.grad_clip
+  grad_clip = HPARAMS.get('grad_clip', None)
+  if grad_clip is not None:
     torch.nn.utils.clip_grad_norm_(
       current_model.parameters(), max_norm=grad_clip
     )

@@ -150,7 +150,7 @@ class CausalAttn(nn.Module):
     seq_len = cfg.seq_len
     attn_scale0 = jnp.log2(seq_len**2 - seq_len)
     self.attn_scale = self.param(
-      'attn_scale', nn.initializers.constant(attn_scale0), ()
+      'attn_scale', nn.initializers.constant(attn_scale0), (1,)
     )
     self.output_projection = nn.DenseGeneral(
       features=cfg.model_dim,

@@ -55,31 +55,8 @@ def sd_transform(sd):
         chunks = sd[k].chunk(3)
         for t, c in zip(['query', 'key', 'value'], chunks):
           out[new_key + (t, k[-1].split('_')[-1])] = c
-      else:
-        out[k] = sd[k]
-    elif 'LSTM' in ''.join(k):
-      l_tmp = out.get(k[:-1], dict())
-      l_tmp[k[-1]] = sd[k]
-      out[k[:-1]] = l_tmp
     else:
       out[k] = sd[k]
-  keys_to_del = []
-  updates = dict()
-  for k in out:
-    if isinstance(out[k], dict):
-      kernels = ['kernel_ih_l0', 'kernel_hh_l0']
-      biases = ['bias_ih_l0', 'bias_hh_l0']
-      weights = torch.cat(
-        [out[k][i].view(-1) for i in kernels]
-        + [out[k][i + '_reverse'].view(-1) for i in kernels]
-        + [out[k][i].view(-1) for i in biases]
-        + [out[k][i + '_reverse'].view(-1) for i in biases]
-      )
-      updates[k + ('weights',)] = weights
-      keys_to_del.append(k)
-  out.update(updates)
-  for k in keys_to_del:
-    del out[k]
   return out
 
 
