@@ -266,7 +266,7 @@ def get_batch_size(workload_name):
   elif workload_name == 'cifar':
     return 32
   elif workload_name == 'finewebedu_lm':
-    return 64
+    return 32
   else:
     raise ValueError(f'Unsupported workload name: {workload_name}.')
 

@@ -124,8 +124,8 @@ class Attention(nn.Module):
     v = v.transpose(1, 2)  # (bsz, nh, seqlen, h_dim)
 
     # Apply QK normalization
-    q = q / torch.norm(q, dim=-1, keepdim=True) + self.eps
-    k = k / torch.norm(k, dim=-1, keepdim=True) + self.eps
+    q = q / (torch.norm(q, dim=-1, keepdim=True) + self.eps)
+    k = k / (torch.norm(k, dim=-1, keepdim=True) + self.eps)
     q *= self.attn_scale
 
     out = F.scaled_dot_product_attention(

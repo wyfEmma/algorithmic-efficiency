@@ -18,7 +18,6 @@ from algoperf.pytorch_utils import pytorch_setup
 
 USE_PYTORCH_DDP = pytorch_setup()[0]
 HPARAMS = {
-   "dropout_rate": 0.1,
    "learning_rate": 0.0025,
    "one_minus_beta1": 0.1,
    "beta2": 0.9955159689799007,
@@ -26,12 +25,7 @@ HPARAMS = {
    "warmup_factor": 0.02,
    "weight_lr_power": 2,
    "label_smoothing": 0.2,
-   "r": 0.75,
-   "conformer_bs": 192,
 }
-
-
-
 
 class AdamWScheduleFree(torch.optim.Optimizer):
    r"""Schedule Free AdamW
@@ -95,7 +89,7 @@ class AdamWScheduleFree(torch.optim.Optimizer):
                state = self.state[p]
                if 'z' not in state:
                    state['z'] = torch.clone(p.data)
-                   state['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.bfloat16)
+                   state['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
                    state['x0'] = p.data.cpu()                   
 
 
@@ -137,9 +131,11 @@ class AdamWScheduleFree(torch.optim.Optimizer):
            weight = ((k+1)**r) * (lr_max**weight_lr_power)
            weight_sum = group['weight_sum'] = group['weight_sum'] + weight
 
-
            ckp1 = weight/weight_sum
-
+           if k == 0:
+               print(f"Step 0 ckp1: {ckp1}")
+               print(f"Step 0 weight: {weight}")
+               print(f"Step 0 weight_sum: {weight_sum}")
 
            bias_correction2 = 1 - beta2 ** (k+1)
            step_size = lr * math.sqrt(bias_correction2)
@@ -156,6 +152,8 @@ class AdamWScheduleFree(torch.optim.Optimizer):
                exp_avg_sq = state['exp_avg_sq']
                z = state['z']
 
+               if decay != 0:
+                   z.sub_(p.data, alpha=lr*decay)
 
                # Unextrapolate
                #p = (p - (1-beta1)*z)/beta1
@@ -169,10 +167,6 @@ class AdamWScheduleFree(torch.optim.Optimizer):
 
 
                z.addcdiv_(grad, denom, value=-step_size)
-
-
-               # Decay
-               z.sub_(p.data, alpha=step_size*decay)
 
 
                ### Take step
@@ -198,8 +192,7 @@ def init_optimizer_state(workload: spec.Workload,
    betas=(1.0 - HPARAMS['one_minus_beta1'], HPARAMS['beta2']),
    warmup_steps=int(HPARAMS['warmup_factor'] * workload.step_hint * 0.75),
    weight_decay=HPARAMS['weight_decay'],
-   weight_lr_power=HPARAMS['weight_lr_power'],
-   r=HPARAMS['r'])
+   weight_lr_power=HPARAMS['weight_lr_power'])
 
 
  optimizer_state = {'optimizer':optimizer, 'max_checked_eval_step': -1, 'has_forced_reset': False, 'first_eval': False, }
@@ -220,7 +213,6 @@ def update_params(workload: spec.Workload,
  """Return (updated_optimizer_state, updated_params, updated_model_state)."""
  del current_params_types
  del loss_type
- del hyperparameters
 
 
 
@@ -295,7 +287,7 @@ def update_params(workload: spec.Workload,
        label_batch=batch['targets'],
        logits_batch=logits_batch,
        mask_batch=batch.get('weights'),
-       label_smoothing=HPARAMS['label_smoothing'])
+       label_smoothing=hyperparameters.label_smoothing if hasattr(hyperparameters, 'label_smoothing') else HPARAMS['label_smoothing'])
    summed_loss = loss_dict['summed']
    n_valid_examples = loss_dict['n_valid_examples']
    if USE_PYTORCH_DDP:
@@ -306,21 +298,15 @@ def update_params(workload: spec.Workload,
 
 
    loss.backward()
+   model_to_print = current_model.module if hasattr(current_model, 'module') else current_model
+   if hasattr(model_to_print, 'embed_tokens') and model_to_print.embed_tokens.weight.grad is not None:
+       print(f"PyTorch Embed Grad Max: {model_to_print.embed_tokens.weight.grad.abs().max().item()}")
    return loss
 
 
  loss = optimizer_state['optimizer'].step(closure)
-# delete
-#  if global_step <= 10:
-#    # Get the first parameter's state
-#    first_p = next(iter(optimizer_state['optimizer'].param_groups[0]['params']))
-#    state = optimizer_state['optimizer'].state[first_p]
-#    log_params(global_step, state['z'], first_p.data, "pytorch")
-  
-#  if global_step == 10:
-#    print("!!! REACHED 10 STEPS - EXITING FOR COMPARISON !!!")
-#    os._exit(0)
-# delete
+ if loss is not None:
+     print(f"PyTorch Loss: {loss.item()}")
  return (optimizer_state, current_param_container, new_model_state)
 
 def get_batch_size(workload_name):
@@ -348,7 +334,7 @@ def get_batch_size(workload_name):
  elif workload_name == 'imagenet_resnet_silu':
    return 512
  elif workload_name == 'finewebedu_lm':
-   return 64
+   return 32
  else:
    raise ValueError(f'Unsupported workload name: {workload_name}.')
 
