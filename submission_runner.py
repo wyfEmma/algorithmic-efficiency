@@ -311,7 +311,7 @@ def train_once(
     'accumulated_submission_time': 0,
     'accumulated_eval_time': 0,
     'accumulated_logging_time': 0,
-    'last_step_end_time': None,
+    'last_step_end_time': 0.0,
   }
   global_step = 0
   eval_results = []
@@ -451,7 +451,7 @@ def train_once(
         if FLAGS.tuning_ruleset == 'external'
         else 1.5 * workload.max_allowed_runtime_sec
       )
-      train_state['is_time_remaining'] = (
+      train_state['is_time_remaining'] = bool(
         train_state['accumulated_submission_time'] < max_allowed_runtime_sec
       )
 
@@ -475,15 +475,15 @@ def train_once(
             # Note that this is one of the stopping conditions for the length of
             # a training run. To score the run we only consider the time
             # to validation target retrospectively.
-            train_state['validation_goal_reached'] = (
+            train_state['validation_goal_reached'] = bool(
               workload.has_reached_validation_target(latest_eval_result)
               or train_state['validation_goal_reached']
             )
-            train_state['test_goal_reached'] = (
+            train_state['test_goal_reached'] = bool(
               workload.has_reached_test_target(latest_eval_result)
               or train_state['test_goal_reached']
             )
-            goals_reached = (
+            goals_reached = bool(
               train_state['validation_goal_reached']
               and train_state['test_goal_reached']
             )

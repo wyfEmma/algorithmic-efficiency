@@ -7,17 +7,18 @@ https://github.com/google/init2winit/blob/master/init2winit/checkpoint.py.
 import os
 from typing import Optional, Sequence, Tuple
 
+import jax
 import numpy as np
 import orbax.checkpoint as ocp
 import torch
 from absl import logging
-from flax import jax_utils
+from flax import serialization
 from flax.training import checkpoints as flax_checkpoints
 from flax.training.checkpoints import latest_checkpoint
 from orbax.checkpoint.type_handlers import NumpyHandler
 from tensorflow.io import gfile  # pytype: disable=import-error
 
-from algoperf import spec
+from algoperf import jax_sharding_utils, spec
 from algoperf.pytorch_utils import pytorch_setup
 
 _, _, DEVICE, _ = pytorch_setup()
@@ -77,6 +78,35 @@ class BoolHandler(NumpyHandler):
 ocp.type_handlers.register_type_handler(np.bool_, BoolHandler(), override=True)
 
 
+def _restore_jax_eval_results(raw_eval_results) -> list:
+  """Restores eval_results list of (step, metrics_dict) tuples from Flax state dict."""
+  if not raw_eval_results:
+    return []
+  if isinstance(raw_eval_results, (list, tuple)):
+    restored = []
+    for item in raw_eval_results:
+      if isinstance(item, dict) and '0' in item and '1' in item:
+        restored.append((int(item['0']), item['1']))
+      else:
+        restored.append(tuple(item))
+    return restored
+  if isinstance(raw_eval_results, dict):
+    restored = []
+    sorted_items = sorted(
+      raw_eval_results.items(),
+      key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else kv[0],
+    )
+    for key, value in sorted_items:
+      if isinstance(value, dict) and '0' in value and '1' in value:
+        restored.append((int(value['0']), value['1']))
+      elif isinstance(value, (list, tuple)) and len(value) == 2:
+        restored.append((int(value[0]), value[1]))
+      else:
+        restored.append((value, key))
+    return restored
+  return list(raw_eval_results)
+
+
 def maybe_restore_checkpoint(
   framework: str,
   optimizer_state: spec.OptimizerState,
@@ -111,6 +141,7 @@ def maybe_restore_checkpoint(
     A tuple of (optimizer_state, model_params, model_state,
     train_state, eval_results, global_step, preemption_count).
   """
+  checkpoint_dir = os.path.abspath(checkpoint_dir)
   if framework == 'jax':
     opt_state, opt_update_fn = optimizer_state
   else:
@@ -129,22 +160,31 @@ def maybe_restore_checkpoint(
   }
 
   if framework == 'jax':
-    latest_ckpt = flax_checkpoints.restore_checkpoint(
-      checkpoint_dir, target=checkpoint_state
+    raw_ckpt = flax_checkpoints.restore_checkpoint(
+      checkpoint_dir, target=None
     )
-    save_path = os.path.join(
-      checkpoint_dir, 'checkpoint_' + str(latest_ckpt['global_step'])
-    )
+    if (
+      raw_ckpt is None
+      or raw_ckpt.get('global_step', uninitialized_global_step)
+      == uninitialized_global_step
+    ):
+      found_checkpoint = False
+      save_path = None
+    else:
+      found_checkpoint = True
+      save_path = os.path.join(
+        checkpoint_dir, 'checkpoint_' + str(raw_ckpt['global_step'])
+      )
   else:
     latest_ckpt = checkpoint_state
     save_path = latest_checkpoint(checkpoint_dir)
     if save_path is not None:
-      latest_ckpt = torch.load(save_path, map_location=DEVICE)
+      latest_ckpt = torch.load(
+        save_path, map_location=DEVICE, weights_only=False
+      )
+    found_checkpoint = latest_ckpt['global_step'] != uninitialized_global_step
 
-  # Load_latest_checkpoint() will return checkpoint_state if
-  # checkpoint_dir does not exist or if it exists and contains no checkpoints.
-  found_checkpoint = latest_ckpt['global_step'] != uninitialized_global_step
-
+  # If no checkpoint is found, return the passed-in initial state.
   if not found_checkpoint:
     return (
       optimizer_state,
@@ -158,6 +198,32 @@ def maybe_restore_checkpoint(
 
   # If there's the latest checkpoint in the checkpoint_dir, restore from that.
   if framework == 'jax':
+    restored_params = serialization.from_state_dict(
+      jax.device_get(model_params), raw_ckpt['model_params']
+    )
+    restored_opt_state = serialization.from_state_dict(
+      jax.device_get(opt_state), raw_ckpt['optimizer_state']
+    )
+    if (
+      model_state is not None
+      and len(jax.tree.leaves(model_state)) > 0
+      and raw_ckpt.get('model_state') is not None
+    ):
+      restored_model_state = serialization.from_state_dict(
+        jax.device_get(model_state), raw_ckpt['model_state']
+      )
+    else:
+      restored_model_state = model_state
+
+    latest_ckpt = {
+      'model_params': restored_params,
+      'optimizer_state': restored_opt_state,
+      'model_state': restored_model_state,
+      'train_state': raw_ckpt['train_state'],
+      'eval_results': _restore_jax_eval_results(raw_ckpt.get('eval_results')),
+      'global_step': int(raw_ckpt['global_step']),
+      'preemption_count': int(raw_ckpt['preemption_count']),
+    }
     checkpoint_state = replicate_checkpoint(
       latest_ckpt,
       pytree_keys=[
@@ -170,9 +236,7 @@ def maybe_restore_checkpoint(
       checkpoint_state['optimizer_state'],
       opt_update_fn,
     )
-    checkpoint_state['eval_results'] = [
-      (value, key) for key, value in latest_ckpt['eval_results'].items()
-    ]
+    logging.info(f'Loaded checkpoint from {save_path}.')
 
   else:
     checkpoint_state = latest_ckpt
@@ -218,7 +282,7 @@ def replicate_checkpoint(
   """
   pytree = {k: latest[k] for k in pytree_keys}
   if replicate:
-    pytree = jax_utils.replicate(pytree)
+    pytree = jax_sharding_utils.replicate(pytree)
   extra_dict = {k: latest[k] for k in latest.keys() if k not in pytree_keys}
   pytree.update(extra_dict)
   return pytree
@@ -255,8 +319,14 @@ def save_checkpoint(
     A tuple of (optimizer_state, model_params, model_state,
     train_state, eval_results, global_step, preemption_count).
   """
+  checkpoint_dir = os.path.abspath(checkpoint_dir)
   if framework == 'jax':
     opt_state, _ = optimizer_state
+    model_params = jax.device_get(model_params)
+    opt_state = jax.device_get(opt_state)
+    model_state = jax.device_get(model_state)
+    train_state = jax.device_get(train_state)
+    eval_results = jax.device_get(eval_results)
   else:
     if isinstance(
       model_params,
@@ -302,7 +372,10 @@ def save_checkpoint(
       )
       for path in checkpoint_files:
         logging.info('Removing checkpoint at %s', path)
-        gfile.rmtree(path)
+        if gfile.isdir(path):
+          gfile.rmtree(path)
+        else:
+          gfile.remove(path)
     torch.save(checkpoint_state, save_path)
 
   logging.info(f'Saved checkpoint to {save_path}.')
